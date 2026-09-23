@@ -277,6 +277,42 @@ def linux_lib_path_entries(status: EmbeddedPostgresStatus) -> List[str]:
     return [str(status.lib_dir)]
 
 
+def windows_path_entries(status: EmbeddedPostgresStatus) -> List[str]:
+    """Directories to prepend to ``PATH`` on Windows for embedded Postgres.
+
+    On Windows the Postgres binaries (initdb, postgres, pg_ctl) need their
+    companion DLLs (libpq, libssl, etc.) which live in native/bin and
+    native/lib. The app itself does not set PATH, so the launcher must do it
+    to ensure offline Postgres starts even when the payload is in a read-only
+    frozen bundle. Returns [bin_dir, lib_dir] when available.
+    """
+    if status.platform.os != WINDOWS or status.package_dir is None:
+        return []
+    entries: List[str] = []
+    bin_dir = status.package_dir / "native" / "bin"
+    if bin_dir.is_dir():
+        entries.append(str(bin_dir))
+    if status.lib_dir is not None and status.lib_dir.is_dir():
+        entries.append(str(status.lib_dir))
+    # Also include native root lib if present (some distributions keep DLLs there)
+    native_root = status.package_dir / "native"
+    if native_root.is_dir() and str(native_root) not in entries:
+        # Only add if it contains DLLs
+        try:
+            if any(p.suffix.lower() == ".dll" for p in native_root.iterdir() if p.is_file()):
+                entries.append(str(native_root))
+        except OSError:
+            pass
+    return entries
+
+
+def darwin_path_entries(status: EmbeddedPostgresStatus) -> List[str]:
+    """Directories to prepend to DYLD_LIBRARY_PATH on macOS if needed."""
+    if status.platform.os != MACOS or status.lib_dir is None:
+        return []
+    return [str(status.lib_dir)]
+
+
 def doctor_lines(status: EmbeddedPostgresStatus) -> List[str]:
     """Human-readable doctor output for the Postgres native runtime."""
     lines: List[str] = []
