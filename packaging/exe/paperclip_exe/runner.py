@@ -32,6 +32,8 @@ def build_environment(
     payload_node_modules: Optional[Path],
     extra: Optional[Mapping[str, str]] = None,
     library_paths: Sequence[str] = (),
+    windows_paths: Sequence[str] = (),
+    darwin_paths: Sequence[str] = (),
 ) -> Dict[str, str]:
     """Environment for the child process.
 
@@ -43,6 +45,10 @@ def build_environment(
     * Prepends ``library_paths`` to ``LD_LIBRARY_PATH`` so the embedded Postgres
       native libraries resolve even for subprocesses spawned before the app's
       own ``prepareEmbeddedPostgresNativeRuntime()`` hook runs.
+    * On Windows, prepends ``windows_paths`` (native/bin, native/lib) to PATH
+      so postgres DLLs are found. Critical because the app does not set PATH
+      itself on Windows.
+    * On macOS, prepends ``darwin_paths`` to DYLD_LIBRARY_PATH.
     * Marks the process as running under the packaged launcher.
     """
     env: Dict[str, str] = dict(os.environ)
@@ -51,9 +57,19 @@ def build_environment(
     path_sep = os.pathsep
     existing_path = env.get("PATH", "")
     parts = [p for p in existing_path.split(path_sep) if p]
-    if node_dir not in parts:
-        parts.insert(0, node_dir)
-    env["PATH"] = path_sep.join(parts)
+
+    # Build PATH: postgres Windows entries first, then node dir, then existing
+    new_path_parts: List[str] = []
+    if windows_paths:
+        for p in windows_paths:
+            if p and p not in new_path_parts:
+                new_path_parts.append(p)
+    if node_dir not in new_path_parts:
+        new_path_parts.append(node_dir)
+    for p in parts:
+        if p not in new_path_parts:
+            new_path_parts.append(p)
+    env["PATH"] = path_sep.join(new_path_parts)
 
     if payload_node_modules is not None:
         existing_node_path = env.get("NODE_PATH", "")
@@ -66,6 +82,15 @@ def build_environment(
         entries = list(library_paths)
         entries += [p for p in existing.split(path_sep) if p]
         env["LD_LIBRARY_PATH"] = path_sep.join(dict.fromkeys(entries))
+
+    if darwin_paths:
+        existing = env.get("DYLD_LIBRARY_PATH", "")
+        entries = list(darwin_paths)
+        entries += [p for p in existing.split(path_sep) if p]
+        env["DYLD_LIBRARY_PATH"] = path_sep.join(dict.fromkeys(entries))
+
+    if windows_paths:
+        env.setdefault("PAPERCLIP_EMBEDDED_POSTGRES_PATH", path_sep.join(windows_paths))
 
     env["PAPERCLIP_EXE_LAUNCHER"] = "1"
     env.setdefault("PAPERCLIP_LAUNCHER_VERSION", __launcher_version__)

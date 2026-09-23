@@ -418,6 +418,178 @@ def _copy_tree(src: Path, dst: Path, *, label: str) -> bool:
     return True
 
 
+def _hoist_embedded_postgres_packages(staged_node_modules: Path, original_roots: List[Path]) -> int:
+    """Ensure @embedded-postgres/* packages are siblings of embedded-postgres.
+
+    The app resolves native packages via:
+        path.resolve(packageRoot, \"..\", \"@embedded-postgres\", slug)
+    So node_modules must contain:
+        embedded-postgres/
+        @embedded-postgres/<slug>/
+
+    pnpm nests the native package inside embedded-postgres's own node_modules,
+    and also in the central .pnpm store. This function finds any native
+    packages anywhere in the staged tree or original roots and copies them to
+    the top-level @embedded-postgres scope.
+
+    Returns number of packages hoisted.
+    """
+    hoisted = 0
+    # Search locations for native packages:
+    # 1. Inside already-staged tree (e.g. staged/embedded-postgres/node_modules/@embedded-postgres/*)
+    # 2. Inside original pnpm store (.pnpm/@embedded-postgres+*/node_modules/@embedded-postgres/*)
+    candidates: List[Path] = []
+
+    # From staged tree
+    for path in staged_node_modules.rglob("@embedded-postgres"):
+        if not path.is_dir():
+            continue
+        # path is .../@embedded-postgres, its children are slugs
+        for slug_dir in path.iterdir():
+            if not slug_dir.is_dir():
+                continue
+            if (slug_dir / "package.json").is_file():
+                candidates.append(slug_dir)
+
+    # From original roots' pnpm store
+    for root in original_roots:
+        pnpm_store = root.parent / ".pnpm" if (root.parent / ".pnpm").is_dir() else root / ".pnpm"
+        # Also check repo root .pnpm
+        for store in [pnpm_store, REPO_ROOT / "node_modules" / ".pnpm"]:
+            if not store.is_dir():
+                continue
+            for entry in store.iterdir():
+                if not entry.name.startswith("@embedded-postgres"):
+                    continue
+                # entry is like @embedded-postgres+linux-x64@...
+                native = entry / "node_modules" / "@embedded-postgres"
+                if not native.is_dir():
+                    continue
+                for slug_dir in native.iterdir():
+                    if (slug_dir / "package.json").is_file():
+                        candidates.append(slug_dir)
+
+    # Deduplicate by slug name, preferring already-staged or first found
+    seen_slugs: Dict[str, Path] = {}
+    for cand in candidates:
+        slug = cand.name
+        if slug not in seen_slugs:
+            seen_slugs[slug] = cand
+
+    target_scope = staged_node_modules / "@embedded-postgres"
+    target_scope.mkdir(parents=True, exist_ok=True)
+
+    for slug, src in seen_slugs.items():
+        dst = target_scope / slug
+        if dst.is_dir():
+            # Already present and healthy, skip
+            continue
+        try:
+            shutil.copytree(src, dst, symlinks=False, ignore_dangling_symlinks=True)
+            hoisted += 1
+        except OSError:
+            continue
+
+    # Also ensure embedded-postgres wrapper itself is at top level (it should be)
+    # If it's nested, hoist it too
+    if not (staged_node_modules / "embedded-postgres").is_dir():
+        for cand in candidates:
+            # Look for wrapper near native package: ../../embedded-postgres
+            wrapper = cand.parent.parent.parent / "embedded-postgres"
+            if wrapper.is_dir() and (wrapper / "package.json").is_file():
+                try:
+                    shutil.copytree(wrapper, staged_node_modules / "embedded-postgres", symlinks=False)
+                    hoisted += 1
+                except OSError:
+                    pass
+                break
+
+    return hoisted
+
+
+def _hoist_all_external_deps(staged_node_modules: Path) -> int:
+    """Hoist all transitive external deps from pnpm store to flat node_modules.
+
+    The CLI bundle (app/index.js) is ESM with external deps like 'zod',
+    'commander', etc. Node's ESM resolver looks for node_modules beside the
+    entry file (payload/app/node_modules) then parent (payload/node_modules).
+    pnpm's default structure keeps transitive deps nested in .pnpm store, not
+    flat, so they are not found unless we hoist them.
+
+    This runs `pnpm --filter paperclipai list --depth=Infinity --parseable`
+    to get all package paths in the dependency graph, then copies any package
+    not already present at top level into the flat node_modules.
+
+    Returns number of packages hoisted.
+    """
+    hoisted = 0
+    try:
+        result = subprocess.run(
+            ["pnpm", "--filter", "paperclipai", "list", "--depth=Infinity", "--parseable"],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return 0
+
+    if result.returncode != 0:
+        return 0
+
+    seen: Dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line == str(REPO_ROOT / "cli"):
+            continue
+        p = Path(line)
+        parts = p.parts
+        try:
+            nm_idx = len(parts) - 1 - parts[::-1].index("node_modules")
+        except ValueError:
+            continue
+        pkg_parts = parts[nm_idx + 1 :]
+        if not pkg_parts:
+            continue
+        pkg_name = "/".join(pkg_parts)
+        if pkg_name.startswith("@paperclipai/"):
+            continue
+        if pkg_name not in seen:
+            seen[pkg_name] = line
+
+    for pkg_name, src_path in seen.items():
+        dst = staged_node_modules / pkg_name
+        if dst.exists():
+            continue
+        # Skip optional platform-specific packages that are not for current OS
+        # except the one matching current platform - they are handled separately
+        # but we still want to hoist the current platform's native package
+        # which is already handled by _hoist_embedded_postgres, so skip all
+        # @embedded-postgres/* here to avoid double work
+        if pkg_name.startswith("@embedded-postgres/"):
+            continue
+        # Skip heavy optional native bindings that are not needed for CLI
+        # (they are large and platform-specific)
+        if pkg_name.startswith("@esbuild/") and "linux" not in pkg_name and "x64" not in pkg_name:
+            # Keep only linux-x64 for current platform, skip others to save space
+            # Actually keep all esbuild platforms? They are small, but we can skip
+            # non-linux to reduce size. For Windows build, we need windows-x64.
+            # For now, only skip if not matching current platform would be complex,
+            # so keep all to be safe - comment out skip
+            pass
+
+        try:
+            shutil.copytree(src_path, dst, symlinks=False, ignore_dangling_symlinks=True)
+            hoisted += 1
+        except OSError:
+            continue
+
+    return hoisted
+
+
 def stage_payload(args: argparse.Namespace, plat: PlatformInfo) -> Optional[StagedPayload]:
     step("Stage 3/7  payload staging")
 
@@ -473,10 +645,13 @@ def stage_payload(args: argparse.Namespace, plat: PlatformInfo) -> Optional[Stag
         note(FAIL, "CLI bundle missing -- run without --skip-app-build")
 
     # 2. package.json so the bundle's external deps resolve as a normal package.
+    # The bundle's version.ts does require("../package.json") from app/index.js,
+    # which resolves to payload/package.json, so we need it in both places.
     cli_pkg = REPO_ROOT / "cli" / "package.json"
     if cli_pkg.is_file():
         shutil.copy2(cli_pkg, app_dir / "package.json")
-        note(OK, f"app/package.json (paperclipai {read_app_version()})")
+        shutil.copy2(cli_pkg, PAYLOAD_DIR / "package.json")
+        note(OK, f"app/package.json + payload/package.json (paperclipai {read_app_version()})")
     else:
         warnings.append(f"cli/package.json not found at {cli_pkg}")
 
@@ -495,6 +670,25 @@ def stage_payload(args: argparse.Namespace, plat: PlatformInfo) -> Optional[Stag
                 warnings.append(f"{remaining} symlinks survived staging")
             else:
                 note(OK, "no symlinks remain (safe for Windows and for freezing)")
+
+            # --- Fix embedded-postgres sibling layout ---------------------------------
+            # pnpm nests the native packages inside embedded-postgres's own
+            # node_modules (e.g. embedded-postgres/node_modules/@embedded-postgres/linux-x64).
+            # The app resolves them as siblings of embedded-postgres, so we must
+            # hoist any @embedded-postgres/* found anywhere in the staged tree
+            # or in the original pnpm store up to the top-level node_modules.
+            # This is the critical fix for the "embedded postgres problem".
+            hoisted_pg = _hoist_embedded_postgres_packages(modules_dst, modules)
+            if hoisted_pg:
+                note(OK, f"hoisted {hoisted_pg} @embedded-postgres native packages to sibling layout")
+
+            # --- Hoist all transitive external deps ------------------------------------
+            # The ESM bundle has external deps (zod, etc.) that pnpm keeps nested
+            # in .pnpm store. Node's ESM resolver needs them flat beside the bundle.
+            # This fixes "Cannot find package 'zod'" errors in frozen builds.
+            hoisted_all = _hoist_all_external_deps(modules_dst)
+            if hoisted_all:
+                note(OK, f"hoisted {hoisted_all} transitive external deps to flat node_modules")
         except StagingError as exc:
             raise BuildError(f"could not stage node_modules: {exc}") from exc
     else:
@@ -812,8 +1006,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-freeze", dest="freeze", action="store_false", help="skip PyInstaller")
     parser.set_defaults(freeze=True)
     parser.add_argument("--skip-app-build", action="store_true", help="do not run the esbuild CLI bundle")
-    parser.add_argument("--onedir", action="store_true",
-                        help="build a folder instead of a self-extracting file (far fewer AV false positives)")
+    parser.add_argument("--onedir", action="store_true", default=True,
+                        help="build a folder instead of a self-extracting file (far fewer AV false positives) [DEFAULT]")
+    parser.add_argument("--onefile", dest="onedir", action="store_false",
+                        help="build a single self-extracting file (more AV false positives, but single file)")
     parser.add_argument("--windowed", action="store_true",
                         help="build without a console (NOT recommended: the CLI is interactive)")
     parser.add_argument("--sign", action="store_true", help="Authenticode-sign the result (needs a certificate)")

@@ -42,7 +42,16 @@ SKIP_DIR_NAMES: Set[str] = {
 SKIP_SUFFIXES: Set[str] = {".pyc", ".pyo", ".log", ".tmp", ".tsbuildinfo"}
 
 #: Guard against pathological trees.
-MAX_FILES = 200_000
+#: Increased from 200k to 1M because pnpm's virtual store can contain many
+#: small files (e.g. discord-api-types payloads) and the full workspace has
+#: 1300+ packages. The guard is still useful to catch infinite loops.
+MAX_FILES = 1_000_000
+
+#: Directories that should never be copied as top-level entries when merging
+#: node_modules roots. The pnpm virtual store lives in node_modules/.pnpm and
+#: is huge; we only need the symlinked packages at the top level, not the
+#: store itself. Copying .pnpm would also duplicate every package.
+SKIP_TOP_LEVEL_DIRS = {".pnpm", ".modules.yaml", ".pnpm-debug.log"}
 
 
 class StagingError(RuntimeError):
@@ -216,16 +225,49 @@ def merge_trees(sources: Sequence[Path], dst: Path) -> CopyStats:
     ``node_modules`` wins over the hoisted root (matching Node's own resolution
     preference). The flat result is what preserves the
     ``embedded-postgres``/``@embedded-postgres/<slug>`` sibling relationship.
+
+    The pnpm virtual store (node_modules/.pnpm) is skipped at the top level
+    because it contains the entire dependency graph duplicated and would
+    explode the file count. The symlinked packages at the top level are what
+    matter; they are dereferenced into real files by copy_tree_materialized.
     """
     stats = CopyStats()
     for index, source in enumerate(sources):
         if not source.is_dir():
             continue
         if index == 0 and not dst.exists():
+            # For the first source, we still need to avoid copying .pnpm as a
+            # top-level dir, so we merge entry-by-entry even for the first root
+            # if it contains a .pnpm folder (which the repo root does).
+            if (source / ".pnpm").is_dir():
+                # Manual merge to skip .pnpm
+                for entry in sorted(source.iterdir()):
+                    if entry.name in SKIP_TOP_LEVEL_DIRS:
+                        stats.skipped_by_rule += 1
+                        continue
+                    target = dst / entry.name
+                    if target.exists():
+                        continue
+                    if entry.is_symlink():
+                        try:
+                            resolved = entry.resolve(strict=True)
+                        except OSError:
+                            stats.broken_symlinks_skipped += 1
+                            continue
+                        stats.symlinks_dereferenced += 1
+                        entry = resolved
+                    if entry.is_dir():
+                        copy_tree_materialized(entry, target, stats=stats)
+                    elif entry.is_file():
+                        _copy_file(entry, target, stats)
+                continue
             stats = copy_tree_materialized(source, dst)
             continue
         # Merge entry-by-entry so existing packages are not clobbered.
         for entry in sorted(source.iterdir()):
+            if entry.name in SKIP_TOP_LEVEL_DIRS:
+                stats.skipped_by_rule += 1
+                continue
             target = dst / entry.name
             if target.exists():
                 continue

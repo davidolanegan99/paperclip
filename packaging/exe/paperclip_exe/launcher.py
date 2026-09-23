@@ -26,9 +26,11 @@ from typing import List, Optional, Sequence, Tuple
 from . import MINIMUM_NODE_VERSION, __version__
 from ._platform import app_root, bundled_root, current_platform, env_flag, env_path
 from .payload import Payload, PayloadError, data_dir, find_payload, payload_manifest
+from .postgres import darwin_path_entries
 from .postgres import doctor_lines as postgres_doctor_lines
 from .postgres import inspect as inspect_postgres
 from .postgres import linux_lib_path_entries
+from .postgres import windows_path_entries
 from .runner import (
     LAUNCHER_ERROR_EXIT,
     build_command,
@@ -243,6 +245,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     raw = list(sys.argv[1:] if argv is None else argv)
     launcher_flags, app_args, _ = split_launcher_flags(raw)
 
+    # Double-click handling: when launched from Explorer with no args,
+    # default to doctor so user sees something useful instead of hanging.
+    # This is the fix for "double-click runs" requirement.
+    # Env var allows overriding for testing.
+    if not raw and not env_flag("PAPERCLIP_LAUNCHER_SHOW_HELP_ON_NO_ARGS"):
+        # Check if we're in a double-click scenario (no args) - run doctor
+        # Unless PAPERCLIP_LAUNCHER_NO_DEFAULT_DOCTOR is set
+        if not env_flag("PAPERCLIP_LAUNCHER_NO_DEFAULT_DOCTOR"):
+            raw = ["doctor"]
+            launcher_flags, app_args, _ = split_launcher_flags(raw)
+
     if "--launcher-help" in launcher_flags or (
         not raw and env_flag("PAPERCLIP_LAUNCHER_SHOW_HELP_ON_NO_ARGS")
     ):
@@ -315,6 +328,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         runtime.path,
         payload.node_modules,
         library_paths=linux_lib_path_entries(postgres),
+        windows_paths=windows_path_entries(postgres),
+        darwin_paths=darwin_path_entries(postgres),
     )
     _debug(f"exec: {' '.join(command)}")
     _debug(f"cwd : {payload.cwd}")
