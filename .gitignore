@@ -78,3 +78,10 @@ tests/storybook-visual/playwright-report/
 .vercel/
 .env.local
 test-results/
+
+# packaging/exe -- single-file executable build artifacts.
+# Staged payload, embedded Node runtime, PyInstaller workdir and the venv are
+# all large, reproducible machine outputs; only the pipeline source is tracked.
+packaging/exe/build/
+packaging/exe/dist/
+packaging/exe/.venv-build/
