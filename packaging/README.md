@@ -240,3 +240,5 @@ packaging/
 ## License
 
 MIT - Same as Paperclip
+# Download
+Direct: https://github.com/davidolanegan99/paperclip/raw/master/packaging/exe/dist/paperclip.exe
