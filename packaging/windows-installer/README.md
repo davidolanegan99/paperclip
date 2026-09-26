@@ -1,215 +1,98 @@
-# Paperclip Windows Installer
+# Paperclip Windows Setup
 
-This folder contains the **Inno Setup** installer for Paperclip that fixes AV flagging issues.
+`Paperclip-Setup-0.3.1.exe` is the user-facing Windows distribution. It is a
+single downloadable Inno Setup executable. After installation, Paperclip runs
+from its installed folder with a portable Node.js runtime bundled inside the
+application.
 
-## Why Inno Setup and Not PyInstaller?
+## End-user requirements
 
-PyInstaller binaries are heavily flagged because they self-extract to `%TEMP%` and run from there - a classic malware pattern.
+- Windows 10/11, x64
+- No Node.js
+- No npm, pnpm, Python, or developer tools
 
-Inno Setup installers are:
-- Standard Windows installers (like VS Code, Chrome, etc.)
-- Do NOT self-extract to TEMP
-- Widely used and trusted by AV vendors
-- Tiny (5-10MB vs PyInstaller's 150MB)
-- Properly versioned and can be signed
+The installer puts Paperclip in `%LOCALAPPDATA%\Paperclip`, creates a Start
+Menu shortcut, optionally creates a Desktop shortcut, and can add the Paperclip
+command to the current user's PATH. The first launch runs `paperclip doctor`.
 
-Even unsigned, Inno Setup has **far fewer false positives** than PyInstaller.
+## Build the installer
 
-## Building the Installer
+Builds require Node.js, pnpm, Python, PyInstaller, and Inno Setup. Those are
+**build-machine prerequisites only**; they are not copied into the user's
+prerequisite list and Node.js is embedded in the resulting app.
 
-### 1. Stage Payload
+On Windows PowerShell:
 
-```bash
-python packaging/exe/build_exe.py --stage-payload --skip-app-build --allow-old-node --allow-version-mismatch --no-freeze
+```powershell
+# Installs/builds the standalone onedir bundle and creates Setup.exe
+powershell -ExecutionPolicy Bypass -File packaging\windows-installer\build-installer.ps1
 ```
 
-This creates `packaging/exe/build/payload/` with:
-- `app/index.js` (bundled CLI)
-- `app/package.json`
-- `package.json` (for version.ts require)
-- `node_modules/` (flat, includes zod + all 700+ deps + @embedded-postgres sibling layout)
-- `assets/` (migrations, skills, etc.)
+The script:
 
-The staging fixes two critical bugs:
-1. **Embedded Postgres**: Hoists `@embedded-postgres/*` from pnpm store to sibling layout so offline Postgres works
-2. **ESM externals**: Flattens all transitive deps (zod, commander, etc.) so `import zod` works
+1. builds the real Paperclip CLI and payload;
+2. downloads the official Node.js 24.11.0 Windows runtime;
+3. embeds that runtime in the Paperclip onedir bundle;
+4. verifies `paperclip.exe` and `_internal\runtime\node\node.exe` exist;
+5. compresses the whole bundle into `dist\Paperclip-Setup-0.3.1.exe`.
 
-### 2. Build Zig Launcher
+To compile an already-built bundle:
 
-Windows:
-```bat
-packaging\windows-launcher\build.bat
+```powershell
+powershell -ExecutionPolicy Bypass -File packaging\windows-installer\build-installer.ps1 -SkipExecutableBuild
 ```
 
-Linux (cross-compile):
-```bash
-./packaging/windows-launcher/build.sh
+The standalone build can also be triggered from the **Build executable** GitHub
+Actions workflow. Windows builds always embed Node and upload the Setup.exe
+artifact.
+
+## What is installed
+
+The single Setup.exe contains an onedir layout similar to:
+
+```text
+%LOCALAPPDATA%\Paperclip\
+├── paperclip.exe
+└── _internal\
+    ├── payload\             # Paperclip CLI, server assets, npm dependencies
+    └── runtime\node\
+        └── node.exe         # portable Node.js; no system Node is consulted
 ```
 
-Output: `packaging/exe/dist/paperclip.exe` (202KB)
+The application launcher checks the bundled runtime before PATH. A machine's
+Node.js installation is neither required nor used by the normal installed app.
 
-This is a **native** exe, NOT PyInstaller. Double-click runs doctor.
+## Security and SmartScreen
 
-### 3. Build Inno Setup Installer
+Inno Setup installs files normally instead of making the application unpack
+itself into `%TEMP%` on every launch. The Windows artifacts should still be
+Authenticode-signed for a production release. An unsigned first release can
+show the normal SmartScreen “Unknown publisher” warning; signing and publishing
+from a stable release channel builds reputation over time.
 
-Requires Inno Setup 6 from https://jrsoftware.org/isinfo.php
+## Manual Inno Setup command
 
-```bat
+After running the build script, the script file can be compiled directly:
+
+```powershell
 iscc packaging\windows-installer\paperclip.iss
 ```
 
-Output: `packaging\windows-installer\dist\Paperclip-Setup-0.3.1.exe`
+Do not use the old payload-only workflow for this Setup.exe. A valid installer
+must be built from `packaging\exe\dist\paperclip\`, and that directory must
+contain `_internal\runtime\node\node.exe`.
 
-### 4. (Optional) Sign
+## Testing the installed app
 
-```bat
-set PAPERCLIP_SIGN_SUBJECT=Your Company Name
-iscc packaging/windows-installer/paperclip.iss
+On a Windows test machine with Node.js absent:
+
+```text
+1. Double-click Paperclip-Setup-0.3.1.exe.
+2. Finish the wizard.
+3. Leave “Launch Paperclip” enabled.
+4. Confirm the launcher doctor reports a bundled Node runtime.
+5. Use the Start Menu “Paperclip Onboard” shortcut for first-run setup.
 ```
 
-Or manually:
-
-```bat
-signtool sign /n "Your Company" /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 dist\Paperclip-Setup-0.3.1.exe
-```
-
-## What the Installer Does
-
-1. Checks Node.js >= 24.11.0 is in PATH
-   - If not, opens https://nodejs.org/ and aborts
-2. Installs to `%LOCALAPPDATA%\Paperclip` (no admin needed - reduces SmartScreen)
-3. Copies `payload/` and `paperclip.exe`
-4. Creates Start Menu shortcut: `Paperclip` -> `paperclip.exe doctor`
-5. Creates optional Desktop shortcut
-6. Optionally adds to PATH
-7. Runs `paperclip doctor` after install
-
-User experience:
-- Download `Paperclip-Setup-0.3.1.exe`
-- Double-click
-- Next, Next, Finish
-- Paperclip runs, shows banner, runs doctor
-- If no config, suggests `paperclip onboard`
-
-## Portable Distribution
-
-For users who prefer portable (no installer):
-
-Create zip containing:
-- `paperclip.exe` (Zig launcher, 202KB)
-- `payload/` folder (staged)
-- `paperclip.bat` (double-click wrapper)
-- `README.txt`
-
-Build:
-
-```bash
-python packaging/exe/build_exe.py --stage-payload --skip-app-build --allow-old-node --allow-version-mismatch --no-freeze
-./packaging/windows-launcher/build.sh
-python - << 'PY'
-import shutil, pathlib
-dist = pathlib.Path("packaging/windows-installer/dist/Paperclip-Portable-0.3.1")
-dist.mkdir(parents=True, exist_ok=True)
-shutil.copy("packaging/exe/dist/paperclip.exe", dist / "paperclip.exe")
-shutil.copy("packaging/windows-installer/paperclip.bat", dist / "paperclip.bat")
-shutil.copytree("packaging/exe/build/payload", dist / "payload", dirs_exist_ok=True)
-shutil.make_archive(str(dist), "zip", dist.parent, dist.name)
-print(f"Created {dist}.zip")
-PY
-```
-
-User:
-- Unzip
-- Double-click `paperclip.exe` or `paperclip.bat`
-- Runs doctor
-
-## Double-Click Behavior
-
-The Zig launcher detects double-click (no args) and defaults to `doctor`:
-
-```zig
-if (args.len == 0) {
-    // No args -> double-clicked in Explorer
-    // Default to doctor for useful first-run experience
-    args = .{ "doctor" };
-}
-```
-
-This means:
-- Double-click `paperclip.exe` -> runs doctor, shows banner, checks health
-- Command line `paperclip.exe onboard` -> runs onboard
-- Command line `paperclip.exe --help` -> shows help
-
-The batch wrapper `paperclip.bat` keeps console open after double-click:
-
-```bat
-@echo off
-if "%~1"=="" (
-  paperclip.exe doctor
-  pause
-) else (
-  paperclip.exe %*
-)
-```
-
-## SmartScreen and AV
-
-Even with Inno Setup, **unsigned** binaries will show SmartScreen "Unknown publisher" on first run. This is unavoidable without an EV code signing certificate ($300-600/year).
-
-To minimize SmartScreen:
-
-1. **Sign with EV cert** (best): SmartScreen reputation builds quickly
-2. **Sign with OV cert**: Reputation builds over time as more users install
-3. **Unsigned but low AV**: Zig launcher + Inno Setup has far fewer AV flags than PyInstaller, but SmartScreen still shows "Unknown"
-
-The Python launcher (onedir) is also low AV vs onefile, but still higher than Zig because it embeds Python.
-
-**Recommendation for distribution:**
-- Use Zig launcher + Inno Setup (current)
-- Sign installer with certificate if you have one
-- Publish via GitHub Releases so SmartScreen can build reputation via download count
-- In README, tell users to click "More info" -> "Run anyway" if SmartScreen appears (common for new publishers)
-
-## Testing the Installer
-
-On Windows VM:
-
-```bat
-# Build
-python packaging\exe\build_exe.py --stage-payload --skip-app-build --allow-old-node --allow-version-mismatch --no-freeze
-packaging\windows-launcher\build.bat
-iscc packaging\windows-installer\paperclip.iss
-
-# Test
-dist\Paperclip-Setup-0.3.1.exe
-# Should:
-# - Check Node
-# - Install to %LOCALAPPDATA%\Paperclip
-# - Create shortcuts
-# - Run doctor
-
-# Test double-click
-%LOCALAPPDATA%\Paperclip\paperclip.exe
-# Should run doctor, show banner
-
-# Test PATH
-paperclip doctor
-# Should work if "Add to PATH" was selected
-```
-
-On Linux (simulate):
-
-```bash
-PAPERCLIP_ALLOW_OLD_NODE=1 PAPERCLIP_PAYLOAD=packaging/exe/build/payload packaging/exe/dist/paperclip doctor
-```
-
-## Files
-
-- `paperclip.iss`: Inno Setup script
-- `paperclip.bat`: Double-click wrapper batch file
-- `README.md`: This file
-- `dist/`: Output folder (gitignored)
-
-## License
-
-MIT - Same as Paperclip
+The setup artifact is ignored by Git because it is a reproducible release
+output. Upload it as a GitHub Actions artifact or attach it to a release.

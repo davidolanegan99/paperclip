@@ -10,15 +10,15 @@ REM    * Python 3.9+   https://www.python.org/downloads/windows/
 REM                    IMPORTANT: tick "Add python.exe to PATH" in the installer.
 REM                    python.org builds are recommended -- they ship python3xx.dll,
 REM                    which PyInstaller needs (Windows Store Python often does not).
-REM    * Node.js 24.11+ https://nodejs.org/  -- required at BUILD time and at RUN
-REM                    time, since the exe uses the Node already on the machine.
+REM    * Node.js 24.11+ https://nodejs.org/  -- required at BUILD time only
+REM                    (the produced distribution embeds its own Node runtime).
 REM    * pnpm           corepack enable      (ships with Node)
 REM
-REM  Output: packaging\exe\dist\paperclip.exe
+REM  Output: a standalone bundle in packaging\exe\dist\paperclip\
+REM          The end-user does not need Node.js installed.
 REM
 REM  Extra arguments are forwarded to build_exe.py, e.g.:
-REM      packaging\exe\build-exe.bat --onedir
-REM      packaging\exe\build-exe.bat --embed-node
+REM      packaging\exe\build-exe.bat --onefile
 REM      packaging\exe\build-exe.bat --sign
 REM ==========================================================================
 setlocal EnableDelayedExpansion
@@ -92,7 +92,7 @@ if not exist "node_modules" if not exist "cli\node_modules" (
 
 REM ---- run the build -------------------------------------------------------
 echo.
-%PY% packaging\exe\build_exe.py --stage-payload --freeze --run-doctor %*
+%PY% packaging\exe\build_exe.py --stage-payload --freeze --onedir --embed-node --run-doctor %*
 if errorlevel 1 goto :fail
 
 echo.
@@ -106,9 +106,8 @@ if exist "packaging\exe\dist\paperclip.exe" (
     echo     packaging\exe\dist\paperclip.exe --launcher-doctor
     echo     packaging\exe\dist\paperclip.exe doctor
     echo.
-    echo   The target machine needs Node 24.11+ installed.
-    echo   To remove that requirement, rebuild with:  --embed-node
-    echo   For fewer antivirus warnings, rebuild with: --onedir
+    echo   This bundle includes Node.js; the target machine needs no Node install.
+    echo   For a single self-extracting executable, add: --onefile
 ) else if exist "packaging\exe\dist\paperclip\paperclip.exe" (
     echo   packaging\exe\dist\paperclip\  (onedir layout)
     echo.

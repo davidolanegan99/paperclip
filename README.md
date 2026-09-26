@@ -296,6 +296,23 @@ Paperclip is a full control plane, not a wrapper. Before you build any of this y
 
 <br/>
 
+## Windows standalone installer
+
+Windows users can run Paperclip without installing Node.js. Download the
+release `Paperclip-Setup-<version>.exe`, double-click it, and finish the wizard.
+The Setup.exe installs the app and its private portable Node.js runtime, then
+launches the first-run doctor. No Node.js, npm, pnpm, Python, or developer tools
+are required on the target machine.
+
+Build/release maintainers can create the same artifact with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File packaging\windows-installer\build-installer.ps1
+```
+
+See [`packaging/windows-installer/README.md`](packaging/windows-installer/README.md)
+for the build and verification details.
+
 ## Quickstart
 
 Open source. Self-hosted. No Paperclip account required.

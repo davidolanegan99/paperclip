@@ -8,8 +8,9 @@
 #  A Windows .exe can only be produced on Windows -- use build-exe.bat there,
 #  or let the GitHub Actions workflow build it for you.
 #
-#  Requirements: Python 3.9+, Node.js 24.11+ (build time AND run time, since
-#  the binary uses the Node already installed), pnpm.
+#  Requirements: Python 3.9+, Node.js 24.11+ (build time only), pnpm.
+#  The default output embeds a portable Node runtime, so end users do not need
+#  Node.js installed.
 #
 #  Extra arguments are forwarded to build_exe.py, e.g.:
 #      ./packaging/exe/build-exe.sh --onedir
@@ -96,7 +97,7 @@ fi
 
 # ---- run the build ------------------------------------------------------
 echo
-"$VENV_PY" packaging/exe/build_exe.py --stage-payload --freeze --run-doctor "$@"
+"$VENV_PY" packaging/exe/build_exe.py --stage-payload --freeze --onedir --embed-node --run-doctor "$@"
 
 echo
 echo "============================================================"

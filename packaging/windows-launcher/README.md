@@ -136,7 +136,7 @@ For a true double-click-to-run experience, use the installer which creates short
 
 Produces `Paperclip-Setup.exe` that:
 
-- Checks Node.js is installed (prompts to install if not)
+- Uses the portable Node.js runtime shipped in the distribution (no system Node prerequisite)
 - Installs to `%LOCALAPPDATA%\Paperclip` (no admin needed)
 - Creates Start Menu and Desktop shortcuts
 - Adds to PATH optionally
@@ -174,11 +174,10 @@ paperclip-installer.exe
 ```
 
 It:
-1. Checks Node.js
-2. Finds payload beside it or in build/payload
-3. Copies to %LOCALAPPDATA%\Paperclip
-4. Copies launcher exe
-5. Runs doctor
+1. Finds the payload and bundled runtime beside it
+2. Copies both to %LOCALAPPDATA%\Paperclip
+3. Copies the launcher exe
+4. Runs doctor without consulting a system Node installation
 
 Distribute as zip containing:
 - paperclip-installer.exe (206KB)

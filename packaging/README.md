@@ -52,7 +52,7 @@ Original PyInstaller onefile build had 3 critical issues:
 - Standard Windows installer (like VS Code, Chrome) - trusted by AV
 - Does NOT self-extract to TEMP
 - Installs to `%LOCALAPPDATA%\Paperclip` (no admin needed - reduces SmartScreen)
-- Checks Node.js >= 24.11.0, prompts to install if missing
+- Bundles portable Node.js >= 24.11.0, so the target machine needs no Node install
 - Creates Start Menu and Desktop shortcuts
 - Optionally adds to PATH
 - Runs doctor after install
@@ -84,17 +84,8 @@ PAPERCLIP_ALLOW_OLD_NODE=1 PAPERCLIP_PAYLOAD=packaging/exe/build/payload ./packa
 ### Windows (production)
 
 ```bat
-REM Stage payload
-python packaging\exe\build_exe.py --stage-payload --skip-app-build --allow-old-node --allow-version-mismatch --no-freeze
-
-REM Build Zig launchers
-packaging\windows-launcher\build.bat
-
-REM Build Python launchers (optional, onedir is default)
-python packaging\exe\build_exe.py --stage-payload --freeze --onedir --allow-old-node --allow-version-mismatch
-
-REM Build Inno Setup installer (needs Inno Setup 6)
-iscc packaging\windows-installer\paperclip.iss
+REM Build the standalone onedir bundle and the single Setup.exe
+powershell -ExecutionPolicy Bypass -File packaging\windows-installer\build-installer.ps1
 REM Output: packaging\windows-installer\dist\Paperclip-Setup-0.3.1.exe
 ```
 
@@ -102,19 +93,21 @@ REM Output: packaging\windows-installer\dist\Paperclip-Setup-0.3.1.exe
 
 ### Option 1: Inno Setup Installer (Recommended)
 
-Single exe installer, low AV:
+Single exe installer, standalone:
 
 ```
-Paperclip-Setup-0.3.1.exe (5-10MB)
+Paperclip-Setup-0.3.1.exe
 ```
 
-User:
-1. Double-click installer
+The Setup.exe contains the complete onedir application, including a portable
+Node runtime. The user experience is:
+
+1. Double-click Setup.exe
 2. Next, Next, Finish
-3. Paperclip runs, shows doctor
-4. Double-click Start Menu shortcut anytime
+3. Paperclip runs its launcher doctor
+4. Use the Start Menu “Paperclip Onboard” shortcut for first-run setup
 
-Build: `iscc packaging/windows-installer/paperclip.iss`
+Build: `powershell -ExecutionPolicy Bypass -File packaging/windows-installer/build-installer.ps1`
 
 ### Option 2: Portable Zip (Zig launcher)
 
@@ -125,6 +118,7 @@ Paperclip-Portable-0.3.1.zip
   paperclip.exe (202KB)
   paperclip.bat (double-click wrapper)
   payload/ (staged app + node_modules + assets)
+  runtime/ (portable Node.js runtime)
   README.txt
 ```
 
@@ -136,7 +130,7 @@ User:
 Build:
 
 ```bash
-python packaging/exe/build_exe.py --stage-payload --skip-app-build --allow-old-node --allow-version-mismatch --no-freeze
+python packaging/exe/build_exe.py --stage-payload --embed-node --skip-app-build --allow-old-node --allow-version-mismatch --no-freeze
 ./packaging/windows-launcher/build.sh
 python - << 'PY'
 import shutil, pathlib
@@ -145,6 +139,7 @@ dist.mkdir(parents=True, exist_ok=True)
 shutil.copy("packaging/exe/dist/paperclip.exe", dist / "paperclip.exe")
 shutil.copy("packaging/windows-installer/paperclip.bat", dist / "paperclip.bat")
 shutil.copytree("packaging/exe/build/payload", dist / "payload", dirs_exist_ok=True)
+shutil.copytree("packaging/exe/build/runtime", dist / "runtime", dirs_exist_ok=True)
 shutil.make_archive(str(dist), "zip", dist.parent, dist.name)
 print(f"Created {dist}.zip")
 PY
@@ -234,8 +229,8 @@ packaging/
 
 ## Requirements
 
-- **Build**: Python 3.9+, Node.js 24.11+, pnpm, Zig 0.12+ (for Zig launcher), Inno Setup 6 (for installer, Windows only)
-- **Runtime**: Node.js 24.11+ on target machine (user allows this). Or use --embed-node to bundle portable Node.
+- **Build**: Python 3.9+, Node.js 24.11+, pnpm, PyInstaller, and Inno Setup 6 (Windows installer)
+- **Runtime**: the Windows Setup.exe bundles Node.js 24.11+; target users do not install Node.js.
 
 ## License
 

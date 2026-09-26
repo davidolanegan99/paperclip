@@ -25,7 +25,7 @@ on:
           - all
         default: windows
       layout:
-        description: "onefile = single .exe; onedir = folder (far fewer AV false positives)"
+        description: "onefile = single executable; onedir = folder (Windows Setup.exe always uses onedir)"
         required: true
         type: choice
         options:
@@ -33,10 +33,10 @@ on:
           - onedir
         default: onedir
       embed_node:
-        description: Embed a portable Node runtime (target then needs no Node installed)
+        description: Embed a portable Node runtime (required for the standalone Windows Setup.exe)
         required: true
         type: boolean
-        default: false
+        default: true
       arch:
         description: Target architecture
         required: true
@@ -159,10 +159,15 @@ jobs:
         shell: bash
         run: |
           args=(--stage-payload --freeze --run-doctor --target-arch "${{ inputs.arch || 'x64' }}")
-          if [ "${{ inputs.layout || 'onedir' }}" = "onedir" ]; then
+          # The Windows Setup.exe is intentionally built onedir: Inno Setup
+          # packages that folder and avoids onefile temp extraction/AV issues.
+          if [ "${{ matrix.os }}" = "windows" ] || [ "${{ inputs.layout || 'onedir' }}" = "onedir" ]; then
             args+=(--onedir)
           fi
-          if [ "${{ inputs.embed_node }}" = "true" ]; then
+          # The Windows distribution is always standalone: Setup.exe must work
+          # on a machine that has never installed Node.js. Other platforms keep
+          # the opt-in switch for smaller developer/test artifacts.
+          if [ "${{ matrix.os }}" = "windows" ] || [ "${{ inputs.embed_node }}" = "true" ]; then
             args+=(--embed-node)
           fi
           python packaging/exe/build_exe.py "${args[@]}"
@@ -175,7 +180,7 @@ jobs:
           else
             name="paperclip"
           fi
-          if [ "${{ inputs.layout || 'onedir' }}" = "onedir" ]; then
+          if [ "${{ matrix.os }}" = "windows" ] || [ "${{ inputs.layout || 'onedir' }}" = "onedir" ]; then
             bin="packaging/exe/dist/paperclip/$name"
           else
             bin="packaging/exe/dist/$name"
@@ -184,11 +189,28 @@ jobs:
           "$bin" --launcher-info
           "$bin" --launcher-doctor
 
+      - name: Install Inno Setup
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          if (-not (Get-Command ISCC.exe -ErrorAction SilentlyContinue)) {
+            choco install innosetup --no-progress --yes
+          }
+          if (-not (Get-Command ISCC.exe -ErrorAction SilentlyContinue)) {
+            throw "Inno Setup 6 (ISCC.exe) was not found"
+          }
+
+      - name: Build standalone Windows Setup.exe
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          & "$PWD/packaging/windows-installer/build-installer.ps1" -SkipExecutableBuild
+
       - name: Package artifact
         shell: bash
         run: |
           cd packaging/exe/dist
-          if [ "${{ inputs.layout || 'onedir' }}" = "onedir" ]; then
+          if [ "${{ matrix.os }}" = "windows" ] || [ "${{ inputs.layout || 'onedir' }}" = "onedir" ]; then
             # Ship the whole onedir folder as a single archive.
             if command -v zip >/dev/null 2>&1; then
               zip -qry paperclip-${{ matrix.os }}.zip paperclip
@@ -216,6 +238,7 @@ jobs:
             packaging/exe/dist/paperclip-*.zip
             packaging/exe/dist/paperclip-*.tar.gz
             packaging/exe/dist/SHA256SUMS.txt
+            packaging/windows-installer/dist/Paperclip-Setup-*.exe
           if-no-files-found: error
           retention-days: 30
 
