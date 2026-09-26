@@ -8,11 +8,12 @@ so the payload/Postgres/runtime stages happen first:
 
 Two layouts are supported, selected by ``PAPERCLIP_ONEDIR``:
 
-* **onefile** (default) -- one self-extracting ``dist/paperclip.exe``. Most
-  convenient, but it unpacks into ``%TEMP%`` at each start, which is the pattern
-  AV heuristics flag most often.
-* **onedir** -- ``dist/paperclip/paperclip.exe`` plus a ``_internal`` folder.
-  Starts faster and produces far fewer false positives. Zip the folder to ship.
+* **onedir** (default) -- ``dist/paperclip/paperclip.exe`` plus a ``_internal``
+  folder. Starts faster and produces far fewer false positives. The Windows
+  Setup.exe packages this folder.
+* **onefile** -- one self-extracting ``dist/paperclip.exe``. Most convenient,
+  but it unpacks into ``%TEMP%`` at each start, which is the pattern AV
+  heuristics flag most often.
 
 Layout frozen into the binary
 -----------------------------

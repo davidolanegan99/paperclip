@@ -2,7 +2,7 @@
 
 The Paperclip application itself is a Node.js/TypeScript codebase (server ~970k
 LOC, React UI, Rust runner, 210 DB tables). It cannot be rewritten in Python, so
-instead this package produces a genuine single-file ``paperclip.exe`` that:
+instead this package produces a genuine distributable ``paperclip.exe`` that:
 
 * carries the *real* application payload (the same esbuild bundle npm ships),
 * carries or locates a Node.js runtime >= 24.11.0,

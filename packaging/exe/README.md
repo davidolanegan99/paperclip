@@ -1,10 +1,12 @@
 # Paperclip single-file executable
 
-Builds **one `paperclip.exe`** (Windows) or `paperclip` (Linux/macOS) that runs
-the real Paperclip application.
+Builds a Windows onedir bundle (or a single `paperclip.exe` when `--onefile` is
+requested) that runs the real Paperclip application. The standalone build embeds
+Node.js; the user-facing single download is the Inno Setup package described in
+`packaging/windows-installer/`.
 
 ```
-packaging\exe\dist\paperclip.exe doctor
+packaging\exe\dist\paperclip\paperclip.exe doctor
 ```
 
 ---
@@ -25,7 +27,7 @@ a small Python launcher that execs it with inherited stdio. So:
 | Interactive prompts / TUI / raw mode | ✅ stdio inherited, not piped |
 | Exit codes | ✅ propagated exactly (verified 0/1/5/42) |
 | ESM + `import.meta` semantics | ✅ preserved (asserted in tests) |
-| Needs Node.js on the target machine | ⚠️ **yes** — Node ≥ 24.11.0, unless built with `--embed-node` |
+| Needs Node.js on the target machine | ✅ **no** for the standalone build (`--embed-node`) |
 | Embedded Postgres works offline | ✅ binaries staged, sibling layout preserved |
 
 ### Why a Python launcher rather than a Node SEA blob
@@ -51,15 +53,18 @@ Double-click **`packaging\exe\build-exe.bat`**, or from a terminal:
 packaging\exe\build-exe.bat
 ```
 
-Output: `packaging\exe\dist\paperclip.exe`
+Output: `packaging\exe\dist\paperclip\` (onedir bundle)
 
-Requirements:
+Requirements at build time:
 - **Python 3.9+** — tick *"Add python.exe to PATH"* in the installer. Prefer
   python.org builds over Windows Store Python: they ship `python3xx.dll`, which
   PyInstaller needs.
-- **Node.js 24.11+** and **pnpm** (`corepack enable`). Node is needed both to
-  *build* and, by default, to *run* — the exe uses the Node already installed.
-  Pass `--embed-node` to bundle a portable runtime instead.
+- **Node.js 24.11+** and **pnpm** (`corepack enable`). Node is used to build the
+  app and download/stage the portable runtime. It is **not required on the target**.
+
+For the single user-facing Setup.exe, run
+`packaging\windows-installer\build-installer.ps1`; it packages this whole onedir
+folder with Inno Setup.
 
 The script installs PyInstaller and runs `pnpm install` for you if either is
 missing.
@@ -112,11 +117,11 @@ Pushing a `v*` tag builds all three platforms.
 writes nothing (asserted by tests).
 
 ```bash
-# default: use the machine's Node
-python3 packaging/exe/build_exe.py --stage-payload --freeze
+# standalone build: Node is embedded; target machines need no Node
+python3 packaging/exe/build_exe.py --stage-payload --embed-node --freeze --onedir
 
-# fully standalone, no Node needed on the target (larger)
-python3 packaging/exe/build_exe.py --stage-payload --embed-node --freeze
+# development-only build using the target machine's Node
+python3 packaging/exe/build_exe.py --stage-payload --freeze --system-node
 
 # package an already-built cli/dist, no rebuild
 python3 packaging/exe/build_exe.py --skip-app-build --stage-payload
@@ -359,7 +364,7 @@ the flattened result still satisfies the app's own resolver.
 1. **The exe is not a Python port.** The application inside is still
    Node.js/TypeScript. This gives identical behaviour; it does not reduce the
    codebase to Python-only.
-2. **Node.js is required at run time** unless you build with `--embed-node`.
+2. **Node.js is not required at run time** for the standalone Windows build; the Setup.exe includes a portable runtime. A development-only `--system-node` build still expects Node on the target.
 3. **Platform-specific binaries.** PyInstaller cannot cross-compile: `.exe` on
    Windows, Mach-O on macOS, ELF on Linux. Build each on its own OS (or use CI).
 4. **Size.** With the full payload and server assets, expect roughly 100–250 MB

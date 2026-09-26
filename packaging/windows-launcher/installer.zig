@@ -15,41 +15,17 @@ pub fn main() !void {
         \\This installer will set up Paperclip to run with a double-click.
         \\
         \\Requirements:
-        \\  - Node.js >= 24.11.0 from https://nodejs.org/
         \\  - Windows 10/11 x64
+        \\  - A distribution beside this launcher containing runtime\node
         \\
         \\The installer will:
-        \\  1. Check Node.js installation
-        \\  2. Install Paperclip to %LOCALAPPDATA%\Paperclip
-        \\  3. Create Start Menu and Desktop shortcuts
+        \\  1. Install Paperclip to %LOCALAPPDATA%\Paperclip
+        \\  2. Copy the bundled Node.js runtime with the app
+        \\  3. Create a double-click launcher
         \\  4. Run 'paperclip doctor' to verify
         \\
         \\
     , .{LAUNCHER_VERSION});
-
-    // Check Node.js
-    const node_check = std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &[_][]const u8{ if (builtin.os.tag == .windows) "node.exe" else "node", "--version" },
-    }) catch null;
-
-    if (node_check) |result| {
-        defer allocator.free(result.stdout);
-        defer allocator.free(result.stderr);
-        if (result.term == .Exited and result.term.Exited == 0) {
-            std.debug.print("Found Node.js: {s}\n", .{std.mem.trim(u8, result.stdout, " \t\r\n")});
-        } else {
-            std.debug.print("Node.js not found or not working.\n", .{});
-            std.debug.print("Please install Node.js >= 24.11.0 from https://nodejs.org/\n", .{});
-            std.debug.print("Then re-run this installer.\n", .{});
-            std.process.exit(1);
-        }
-    } else {
-        std.debug.print("Node.js not found in PATH.\n", .{});
-        std.debug.print("Please install Node.js >= 24.11.0 from https://nodejs.org/\n", .{});
-        std.debug.print("Then re-run this installer.\n", .{});
-        std.process.exit(1);
-    }
 
     // Determine install directory
     var install_dir: []u8 = undefined;
@@ -75,13 +51,15 @@ pub fn main() !void {
     // Find payload source: beside installer, or in build/payload
     var payload_src: ?[]u8 = null;
     defer if (payload_src) |p| allocator.free(p);
+    var runtime_src: ?[]u8 = null;
+    defer if (runtime_src) |p| allocator.free(p);
 
     const exe_dir = std.fs.selfExeDirPathAlloc(allocator) catch null;
     if (exe_dir) |dir| {
         defer allocator.free(dir);
         const candidates = [_][]const u8{
             try std.fs.path.join(allocator, &[_][]const u8{ dir, "payload" }),
-            try std.fs.path.join(allocator, &[_][]const u8{ dir, "..", "packaging", "exe", "build", "payload" }),
+            try std.fs.path.join(allocator, &[_][]const u8{ dir, "..", "build", "payload" }),
             try std.fs.path.join(allocator, &[_][]const u8{ ".", "packaging", "exe", "build", "payload" }),
         };
         for (candidates) |cand| {
@@ -89,6 +67,24 @@ pub fn main() !void {
             if (std.fs.cwd().statFile(cand) catch null) |s| {
                 if (s.kind == .directory) {
                     payload_src = try allocator.dupe(u8, cand);
+                    break;
+                }
+            }
+        }
+
+        const runtime_candidates = [_][]const u8{
+            try std.fs.path.join(allocator, &[_][]const u8{ dir, "runtime" }),
+            try std.fs.path.join(allocator, &[_][]const u8{ dir, "..", "build", "runtime" }),
+            try std.fs.path.join(allocator, &[_][]const u8{ ".", "packaging", "exe", "build", "runtime" }),
+        };
+        const runtime_node_rel = if (builtin.os.tag == .windows) "node/node.exe" else "node/bin/node";
+        for (runtime_candidates) |candidate| {
+            defer allocator.free(candidate);
+            const node_path = try std.fs.path.join(allocator, &[_][]const u8{ candidate, runtime_node_rel });
+            defer allocator.free(node_path);
+            if (std.fs.cwd().statFile(node_path) catch null) |s| {
+                if (s.kind == .file) {
+                    runtime_src = try allocator.dupe(u8, candidate);
                     break;
                 }
             }
@@ -125,7 +121,14 @@ pub fn main() !void {
         return;
     }
 
+    if (runtime_src == null) {
+        std.debug.print("\nBundled Node runtime not found beside installer.\n", .{});
+        std.debug.print("Rebuild with --embed-node, then distribute the runtime folder with this installer.\n", .{});
+        std.process.exit(1);
+    }
+
     std.debug.print("Found payload at: {s}\n", .{payload_src.?});
+    std.debug.print("Found bundled runtime at: {s}\n", .{runtime_src.?});
 
     // Copy payload to install dir
     std.debug.print("Copying payload (this may take a minute)...\n", .{});
@@ -138,7 +141,12 @@ pub fn main() !void {
     // Copy recursively - use std.fs
     try copyDir(allocator, payload_src.?, payload_dst);
 
-    std.debug.print("Payload copied.\n", .{});
+    const runtime_dst = try std.fs.path.join(allocator, &[_][]const u8{ install_dir, "runtime" });
+    defer allocator.free(runtime_dst);
+    std.fs.cwd().deleteTree(runtime_dst) catch {};
+    try copyDir(allocator, runtime_src.?, runtime_dst);
+
+    std.debug.print("Payload and bundled runtime copied.\n", .{});
 
     // Copy launcher exe to install dir
     const launcher_name = if (builtin.os.tag == .windows) "paperclip.exe" else "paperclip";

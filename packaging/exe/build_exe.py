@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a single-file Paperclip executable (``paperclip.exe`` on Windows).
+"""Build a distributable Paperclip executable (``paperclip.exe`` on Windows).
 
 The Paperclip app is Node.js/TypeScript. It is not rewritten -- the executable
 *contains the real, unmodified build output* and a small Python launcher execs it
@@ -983,16 +983,14 @@ def stage_verify(args: argparse.Namespace, binary: Optional[Path]) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="build_exe.py",
-        description="Build a single-file Paperclip executable containing the real app.",
+        description="Build a Paperclip executable containing the real app.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "examples:\n"
-            "  # Windows build using Node already installed on the machine\n"
-            "  py -3 packaging\\exe\\build_exe.py --stage-payload --freeze\n\n"
-            "  # lower AV false positives: folder layout instead of self-extracting\n"
-            "  py -3 packaging\\exe\\build_exe.py --stage-payload --freeze --onedir\n\n"
-            "  # fully standalone (bundles a portable Node, ~larger)\n"
-            "  py -3 packaging\\exe\\build_exe.py --stage-payload --embed-node --freeze\n\n"
+            "  # standalone Windows build: Node is included for the target\n"
+            "  py -3 packaging\\exe\\build_exe.py --stage-payload --embed-node --freeze --onedir\n\n"
+            "  # development-only build using Node already installed on the target\n"
+            "  py -3 packaging\\exe\\build_exe.py --stage-payload --system-node --freeze --onedir\n\n"
             "  # package an already-built cli/dist without rebuilding\n"
             "  python3 packaging/exe/build_exe.py --skip-app-build --stage-payload\n\n"
             "  # validate the pipeline only (writes nothing)\n"
@@ -1001,7 +999,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--all", action="store_true", help="enable --stage-payload and --freeze")
     parser.add_argument("--stage-payload", action="store_true", help="stage app/, node_modules/ and assets/")
-    parser.add_argument("--embed-node", action="store_true", help="bundle a portable Node runtime inside the exe")
+    runtime_group = parser.add_mutually_exclusive_group()
+    runtime_group.add_argument("--embed-node", dest="embed_node", action="store_true", help="bundle a portable Node runtime inside the exe (standalone distribution)")
+    runtime_group.add_argument("--system-node", dest="embed_node", action="store_false", help="use Node installed on the target machine (development-only distribution)")
+    parser.set_defaults(embed_node=False)
     parser.add_argument("--freeze", action="store_true", help="run PyInstaller to produce the executable")
     parser.add_argument("--no-freeze", dest="freeze", action="store_false", help="skip PyInstaller")
     parser.set_defaults(freeze=True)
